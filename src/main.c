@@ -71,6 +71,7 @@ static void IRAM_ATTR pcnt_example_intr_handler(void *arg)
     /* Save the PCNT event type that caused an interrupt
        to pass it to the main program */
     pcnt_get_event_status(pcnt_unit, &evt.status);
+	ESP_LOGI(TAG, "RECEIVE");
     xQueueSendFromISR(pcnt_evt_queue, &evt, NULL);
 }
 
