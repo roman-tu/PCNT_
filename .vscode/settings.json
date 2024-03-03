@@ -1,0 +1,11 @@
+{
+	"files.associations": {
+		"esp_sleep.h": "c",
+		"esp_log.h": "c",
+		"pcnt.h": "c",
+		"gpio.h": "c",
+		"esp_intr_alloc.h": "c",
+		"chrono": "c",
+		"algorithm": "c"
+	}
+}
