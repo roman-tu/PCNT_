@@ -71,7 +71,6 @@ static void IRAM_ATTR pcnt_example_intr_handler(void *arg)
     /* Save the PCNT event type that caused an interrupt
        to pass it to the main program */
     pcnt_get_event_status(pcnt_unit, &evt.status);
-	ESP_LOGI(TAG, "RECEIVE");
     xQueueSendFromISR(pcnt_evt_queue, &evt, NULL);
 }
 
@@ -117,8 +116,8 @@ static void pcnt_example_init(int unit)
         .channel = PCNT_CHANNEL_0,
         .unit = unit,
         // What to do on the positive / negative edge of pulse input?
-        .pos_mode = PCNT_COUNT_INC,   // Count up on the positive edge
-        .neg_mode = PCNT_COUNT_DIS,   // Keep the counter value on the negative edge
+        .pos_mode = 1,   // Count up on the positive edge
+        .neg_mode = 0,   // Keep the counter value on the negative edge
         // What to do when control input is low or high?
         .lctrl_mode = PCNT_MODE_REVERSE, // Reverse counting direction if low
         .hctrl_mode = PCNT_MODE_KEEP,    // Keep the primary counter mode if high
@@ -127,7 +126,9 @@ static void pcnt_example_init(int unit)
         .counter_l_lim = PCNT_L_LIM_VAL,
     };
     /* Initialize PCNT unit */
-    pcnt_unit_config(&pcnt_config);
+	// ESP_LOGI(TAG, "tut");
+    // printf(pcnt_unit_config(&pcnt_config));
+	pcnt_unit_config(&pcnt_config);
 
     /* Configure and enable the input filter */
     pcnt_set_filter_value(unit, 100);
@@ -168,6 +169,7 @@ void app_main(void)
     int16_t count = 0;
     pcnt_evt_t evt;
     portBASE_TYPE res;
+	PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[PCNT_INPUT_SIG_IO], PIN_FUNC_GPIO);
     while (1) {
         /* Wait for the event information passed from PCNT's interrupt handler.
          * Once received, decode the event type and print it on the serial monitor.
