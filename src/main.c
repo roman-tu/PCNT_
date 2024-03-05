@@ -9,15 +9,50 @@
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
 */
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
+
 #include "driver/ledc.h"
 #include "driver/pcnt.h"
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "freertos/semphr.h"
+#include "freertos/queue.h"
+#include "freertos/timers.h"
+#include "esp_system.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_timer.h"
+#include <math.h>
+
+
+#include "esp_eth.h"
+#include "sdkconfig.h"
+#include "driver/gpio.h"
+#include "esp_tls.h"
+#include "esp_crt_bundle.h"
+
+#include "esp_http_client.h"
+
+#include "mqtt_client.h"
+#include "esp_spiffs.h"
+#include "cJSON.h"
 
 static const char *TAG = "example";
+static int s_retry_num = 0;
+int STARTCOUNTS = 4000000;
+int count = 0;
+int count_per_hour = 0;
+int count_per_minute = 0;
+static uint8_t button_1_state = -1;
+
+SemaphoreHandle_t input_semaphore;
+SemaphoreHandle_t timer_semaphore;
 
 /**
  * TEST CODE BRIEF
@@ -41,15 +76,120 @@ static const char *TAG = "example";
  *   - reaches 'l_lim' value or 'h_lim' value,
  *   - will be reset to zero.
  */
-#define PCNT_H_LIM_VAL      10
-#define PCNT_L_LIM_VAL     -10
+#define PCNT_H_LIM_VAL      -1
+#define PCNT_L_LIM_VAL     -1
 #define PCNT_THRESH1_VAL    5
 #define PCNT_THRESH0_VAL   -5
-#define PCNT_INPUT_SIG_IO   14  // Pulse Input GPIO
+#define PCNT_INPUT_SIG_IO   36  // Pulse Input GPIO
 #define PCNT_INPUT_CTRL_IO  17  // Control GPIO HIGH=count up, LOW=count down
-#define LEDC_OUTPUT_IO      12 // Output GPIO of a sample 1 Hz pulse generator
+#define LEDC_OUTPUT_IO      15 // Output GPIO of a sample 1 Hz pulse generator
+uint32_t io_num;
+#define REALY_1_OUTPUT_PIN GPIO_NUM_2
+#define REALY_2_OUTPUT_PIN GPIO_NUM_12
 
+#define DEFAULT_WIFI_SSID "VEHI"
+#define DEFAULT_WIFI_PASS "VEHI2019"
+#define MAXIMUM_RETRY 10
+
+#define RPC_RESET_METHOD "reset"
+#define KEEPALIVE_UPD_PERIOD_NUM 20
+// #define USER_NAME "lgaZmvNhkhvLCb3P0ZVk"
+
+#define AP_ESP_WIFI_SSID "CUBA_BUTTON"
+#define AP_ESP_WIFI_PASS "CUBABUTTON"
+#define AP_ESP_WIFI_CHANNEL 2
+#define AP_MAX_STA_CONN 1
+
+#define BUFFER_SIZE 128
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#define DEFAULT_ETHERNET_PHY_CONFIG phy_lan8720_default_ethernet_config
+
+#define PIN_PHY_POWER GPIO_NUM_16 // comment if always on
+#define PIN_SMI_MDC GPIO_NUM_23
+#define PIN_SMI_MDIO GPIO_NUM_18
+
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT BIT1
+
+#define ESP_INTR_FLAG_DEFAULT 0
+
+#ifndef APP_CPU_NUM
+#define APP_CPU_NUM PRO_CPU_NUM
+#endif
+
+#define WEBSOCKET_URI "https://webhook.site/866bca7e-8a54-4c3f-b5bf-3fe0d579e8a7??set=1&id=1"
+#define TEST_BROKER_URL "mqtt://iot.tocloud.kz:1883"
+#define TEST_MQTT_TOPIC "office/devices/telemetry"
+#define TEST_MQTT_TOKEN "VphkvG0t7HeqAMhTW2hj"
+
+#define RPC_REQUEST_TOPIC "v1/devices/me/rpc/request/"
+
+#define WEB_MOUNT_POINT "/spiffs"
+
+#define MAX_HTTP_RECV_BUFFER 512
+#define MAX_HTTP_OUTPUT_BUFFER 2086
+
+static char BROKER_URL[128];
+static char WIFI_SSID[32];
+static char WIFI_PASS[64];
+static char MQTT_TOKEN[32];
+static char MQTT_TOPIC[128];
+static char ATTR_TOPIC[128];
+
+static char IP_ADDRESS[24];
+static char GATEWAY[24];
+
+static char NET_MASK[24];
+static char DNS_1[24];
+static char DNS_2[24];
+
+static char SN[24];
+static char FIRMWARE_VER[24];
+static char HARDWARE_VER[24];
+static char PLACE[128];
+static char PORT[6];
+static char conf_PORT[6];
+
+static esp_timer_handle_t MQTT_VALUE_UPDATER = NULL;
+
+static char BASE_URL[24];
+
+static bool broker_connected = false;
+static bool connected = false;
+static bool GOT_IP = false;
+
+// static bool factory_mode = true;
+
+int MQTT_UPDATE_PERIOD = 10000;
+static int keepalive_counter = 0;
+FILE *f;
+
+int pcnt_unit = PCNT_UNIT_0;
 xQueueHandle pcnt_evt_queue;   // A queue to handle pulse counter events
+xQueueHandle mqt_queue;   //
+
+esp_mqtt_client_handle_t client;
+
+esp_mqtt_client_config_t mqtt_cfg = {
+    .uri = BROKER_URL,
+    .username = MQTT_TOKEN,
+};
+
+static EventGroupHandle_t s_wifi_event_group;
+
+static esp_netif_t *netif;
+
+static char message[BUFFER_SIZE];
+
 
 /* A sample structure to pass events from the PCNT
  * interrupt handler to the main program.
@@ -58,6 +198,710 @@ typedef struct {
     int unit;  // the PCNT unit that originated an interrupt
     uint32_t status; // information on the event type that caused the interrupt
 } pcnt_evt_t;
+
+static void ap_wifi_event_handler(void *arg, esp_event_base_t event_base,
+                                  int32_t event_id, void *event_data)
+{
+  if (event_id == WIFI_EVENT_AP_STACONNECTED)
+  {
+    wifi_event_ap_staconnected_t *event = (wifi_event_ap_staconnected_t *)event_data;
+    ESP_LOGI(TAG, "station " MACSTR " join, AID=%d",
+             MAC2STR(event->mac), event->aid);
+  }
+  else if (event_id == WIFI_EVENT_AP_STADISCONNECTED)
+  {
+    wifi_event_ap_stadisconnected_t *event = (wifi_event_ap_stadisconnected_t *)event_data;
+    ESP_LOGI(TAG, "station " MACSTR " leave, AID=%d",
+             MAC2STR(event->mac), event->aid);
+  }
+}
+
+void init_spiffs()
+{
+  ESP_LOGI(TAG, "Initializing SPIFFS");
+
+  esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = true};
+
+  esp_err_t ret = esp_vfs_spiffs_register(&conf);
+
+  if (ret != ESP_OK)
+  {
+    if (ret == ESP_FAIL)
+    {
+      ESP_LOGE(TAG, "Failed to mount or format filesystem");
+    }
+    else if (ret == ESP_ERR_NOT_FOUND)
+    {
+      ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+    }
+    else
+    {
+      ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+    }
+    return;
+  }
+
+  size_t total = 0, used = 0;
+  ret = esp_spiffs_info(conf.partition_label, &total, &used);
+  if (ret != ESP_OK)
+  {
+    ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s). Formatting...", esp_err_to_name(ret));
+    esp_spiffs_format(conf.partition_label);
+    return;
+  }
+  else
+  {
+    ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+  }
+}
+
+void parse_mqtt_message_data(char *request, char *data)
+{
+  char topic[128];
+  // sprintf(topic, "%s%s", RPC_RESPONCE_TOPIC, request);
+  // ESP_LOGI(TAG, "responce topic: %s   ", topic);
+
+  cJSON *json = cJSON_Parse(data);
+  cJSON *method = NULL;
+
+  if (json != NULL)
+  {
+    method = cJSON_GetObjectItemCaseSensitive(json, "method");
+    if (strcmp(method->valuestring, RPC_RESET_METHOD) == 0)
+    {
+      ESP_LOGI(TAG, "Reset by RPC");
+      esp_wifi_stop();
+      esp_restart();
+    }
+  }
+}
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+  ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
+  esp_mqtt_event_handle_t event = event_data;
+  esp_mqtt_client_handle_t client = event->client;
+  int msg_id;
+  switch ((esp_mqtt_event_id_t)event_id)
+  {
+  case MQTT_EVENT_CONNECTED:
+
+    ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+    msg_id = esp_mqtt_client_subscribe(client, "v1/devices/me/rpc/request/+", 0);
+    ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+    broker_connected = true;
+
+    if (strlen(ATTR_TOPIC) > 0)
+    {
+      cJSON *message_json = cJSON_CreateObject();
+      if (message_json != NULL)
+      {
+        cJSON_AddStringToObject(message_json, "SN", SN);
+        cJSON_AddStringToObject(message_json, "firmware_ver", FIRMWARE_VER);
+        cJSON_AddStringToObject(message_json, "hardware_ver", HARDWARE_VER);
+        cJSON_AddStringToObject(message_json, "place", PLACE);
+        cJSON_AddStringToObject(message_json, "ip", IP_ADDRESS);
+      }
+      char *json = cJSON_Print(message_json);
+      esp_mqtt_client_publish(client, ATTR_TOPIC, json, 0, 1, 0);
+      cJSON_free(json);
+      cJSON_Delete(message_json);
+    }
+    // sprintf(message, "{button_1:%d, button_2:%d}", !button_1_state, !button_2_state);
+    // msg_id = esp_mqtt_client_publish(client, MQTT_TOPIC, message, 0, 1, 0);
+
+    if (MQTT_VALUE_UPDATER != NULL)
+    {
+      xTimerStart(MQTT_VALUE_UPDATER, 0);
+      ESP_LOGI(TAG, "MQTT update timer started");
+    }
+
+    ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+    break;
+  case MQTT_EVENT_DISCONNECTED:
+    ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+    broker_connected = false;
+    keepalive_counter++;
+    break;
+
+  case MQTT_EVENT_SUBSCRIBED:
+    ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+    // msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
+    msg_id = 0;
+    ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+    break;
+  case MQTT_EVENT_UNSUBSCRIBED:
+    ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+    break;
+  case MQTT_EVENT_PUBLISHED:
+    // ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+    keepalive_counter = 0;
+    break;
+  case MQTT_EVENT_DATA:
+    ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+    ESP_LOGI(TAG, "DEFAULT_TOPIC=%.*s\r\n", event->topic_len, event->topic);
+    ESP_LOGI(TAG, "DATA=%.*s\r\n", event->data_len, event->data);
+    int request_id_len = event->topic_len - strlen(RPC_REQUEST_TOPIC);
+    ESP_LOGI(TAG, "equest_id_len : %d", request_id_len);
+    char request_id[16];
+    strncpy(request_id, &event->topic[strlen(RPC_REQUEST_TOPIC)], request_id_len);
+    request_id[request_id_len] = '\0';
+    // strcpy(request_id, "\n");
+    ESP_LOGI(TAG, "Request_id: %s", request_id);
+    parse_mqtt_message_data(request_id, event->data);
+    break;
+    case MQTT_EVENT_ERROR:
+    ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+    keepalive_counter++;
+  default:
+    ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+    keepalive_counter++;
+    break;
+  }
+}
+
+static void mqtt_app_start(void)
+{
+  client = esp_mqtt_client_init(&mqtt_cfg);
+  ESP_LOGI(TAG, "MQTT URL: %s MQTT TOKEN: %s", mqtt_cfg.uri, mqtt_cfg.username);
+//   if (!factory_mode)
+//   {
+//     MQTT_VALUE_UPDATER = xTimerCreate("MQTT_UPDATER_TIMER", pdMS_TO_TICKS(MQTT_UPDATE_PERIOD), pdTRUE, (void *)1, &mqtt_update_timer_callback);
+//   }
+  esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+  esp_mqtt_client_start(client);
+}
+
+static void event_handler(void *arg, esp_event_base_t event_base,
+                          int32_t event_id, void *event_data)
+{
+  if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+  {
+    esp_wifi_connect();
+  }
+  else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+  {
+    connected = false;
+    if (s_retry_num < MAXIMUM_RETRY)
+    {
+      vTaskDelay(5000 / portTICK_RATE_MS);
+      esp_wifi_connect();
+      s_retry_num++;
+      ESP_LOGI(TAG, "retry to connect to the AP");
+    }
+    else
+    {
+      xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+      esp_restart();
+    }
+    ESP_LOGI(TAG, "connect to the AP fail");
+  }
+  else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+  {
+    ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+    ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+    s_retry_num = 0;
+    sprintf(IP_ADDRESS, IPSTR, IP2STR(&event->ip_info.ip));
+    xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    connected = true;
+    GOT_IP = true;
+  }
+}
+
+void set_connection_prop(esp_netif_t *netif)
+{
+  if (strlen(IP_ADDRESS) > 6)
+  {
+    ESP_ERROR_CHECK(esp_netif_dhcpc_stop(netif));
+    esp_netif_ip_info_t info_t;
+    memset(&info_t, 0, sizeof(esp_netif_ip_info_t));
+    info_t.ip.addr = esp_ip4addr_aton(IP_ADDRESS);
+    if (strlen(GATEWAY) > 6)
+    {
+      info_t.gw.addr = esp_ip4addr_aton(GATEWAY);
+    }
+    if (strlen(NET_MASK) > 6)
+    {
+      info_t.netmask.addr = esp_ip4addr_aton(NET_MASK);
+    }
+    esp_netif_set_ip_info(netif, &info_t);
+  }
+
+  if (strlen(DNS_1) > 6)
+  {
+    esp_netif_dns_info_t dns_info_1;
+    memset(&dns_info_1, 0, sizeof(esp_netif_dns_info_t));
+    dns_info_1.ip.type = ESP_NETIF_DNS_MAIN;
+    dns_info_1.ip.u_addr.ip4.addr = esp_ip4addr_aton(DNS_1);
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns_info_1);
+  }
+
+  if (strlen(DNS_2) > 6)
+  {
+    esp_netif_dns_info_t dns_info_2;
+    memset(&dns_info_2, 0, sizeof(esp_netif_dns_info_t));
+    dns_info_2.ip.type = ESP_NETIF_DNS_BACKUP;
+    dns_info_2.ip.u_addr.ip4.addr = esp_ip4addr_aton(DNS_2);
+    esp_netif_set_dns_info(netif, ESP_NETIF_DNS_BACKUP, &dns_info_2);
+  }
+}
+
+void wifi_init_sta(void)
+{
+  s_wifi_event_group = xEventGroupCreate();
+  netif = esp_netif_create_default_wifi_sta();
+  set_connection_prop(netif);
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+  esp_event_handler_instance_t instance_any_id;
+  esp_event_handler_instance_t instance_got_ip;
+  ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                      ESP_EVENT_ANY_ID,
+                                                      &event_handler,
+                                                      NULL,
+                                                      &instance_any_id));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                      IP_EVENT_STA_GOT_IP,
+                                                      &event_handler,
+                                                      NULL,
+                                                      &instance_got_ip));
+
+  wifi_config_t wifi_config = {
+      .sta = {
+          .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+      },
+  };
+
+  const char *ssid = WIFI_SSID;
+  const char *password = WIFI_PASS;
+
+  // fix saving from web ui with new line char
+
+  char *new_line_pos = strchr(WIFI_SSID, '\n');
+  int len;
+
+  if (new_line_pos != NULL)
+  {
+    len = new_line_pos - ssid - 1;
+  }
+  else
+  {
+    len = strlen(WIFI_SSID);
+  }
+
+  strncpy((char *)wifi_config.sta.ssid, (char *)ssid, len);
+
+  new_line_pos = strchr(WIFI_PASS, '\n');
+
+  if (new_line_pos != NULL)
+  {
+    len = new_line_pos - password - 1;
+  }
+  else
+  {
+    len = strlen(WIFI_PASS);
+  }
+
+  strncpy((char *)wifi_config.sta.password, (char *)password, len);
+
+  ESP_LOGI(TAG, "SSID: %s. PASS: %s. \n", wifi_config.sta.ssid, wifi_config.sta.password);
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+  ESP_ERROR_CHECK(esp_wifi_start());
+
+  ESP_LOGI(TAG, "wifi_init_sta finished.");
+
+  EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                         pdFALSE,
+                                         pdFALSE,
+                                         portMAX_DELAY);
+
+  if (bits & WIFI_CONNECTED_BIT)
+  {
+    ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
+             WIFI_SSID, WIFI_PASS);
+  }
+  else if (bits & WIFI_FAIL_BIT)
+  {
+    ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
+             WIFI_SSID, WIFI_PASS);
+  }
+  else
+  {
+    ESP_LOGE(TAG, "UNEXPECTED EVENT");
+  }
+}
+
+static void eth_event_handler(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data)
+{
+  uint8_t mac_addr[6] = {0};
+  /* we can get the ethernet driver handle from event data */
+  esp_eth_handle_t eth_handle = *(esp_eth_handle_t *)event_data;
+
+  switch (event_id)
+  {
+  case ETHERNET_EVENT_CONNECTED:
+    esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
+    ESP_LOGI(TAG, "Ethernet Link Up");
+    ESP_LOGI(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
+             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+    connected = true;
+    break;
+  case ETHERNET_EVENT_DISCONNECTED:
+    ESP_LOGI(TAG, "Ethernet Link Down");
+    connected = false;
+    break;
+  case ETHERNET_EVENT_START:
+    ESP_LOGI(TAG, "Ethernet Started");
+    break;
+  case ETHERNET_EVENT_STOP:
+    ESP_LOGI(TAG, "Ethernet Stopped");
+    break;
+  default:
+    break;
+  }
+}
+
+/** Event handler for IP_EVENT_ETH_GOT_IP */
+static void got_ip_event_handler(void *arg, esp_event_base_t event_base,
+                                 int32_t event_id, void *event_data)
+{
+  ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+  const esp_netif_ip_info_t *ip_info = &event->ip_info;
+
+  ESP_LOGI(TAG, "Ethernet Got IP Address");
+  ESP_LOGI(TAG, "~~~~~~~~~~~");
+  ESP_LOGI(TAG, "ETHIP:" IPSTR, IP2STR(&ip_info->ip));
+  ESP_LOGI(TAG, "ETHMASK:" IPSTR, IP2STR(&ip_info->netmask));
+  ESP_LOGI(TAG, "ETHGW:" IPSTR, IP2STR(&ip_info->gw));
+  ESP_LOGI(TAG, "~~~~~~~~~~~");
+
+  esp_netif_dns_info_t gdns1, gdns2, gdns3;
+  ESP_ERROR_CHECK(esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &gdns1));
+  ESP_ERROR_CHECK(esp_netif_get_dns_info(netif, ESP_NETIF_DNS_BACKUP, &gdns2));
+  ESP_ERROR_CHECK(esp_netif_get_dns_info(netif, ESP_NETIF_DNS_FALLBACK, &gdns3));
+
+  ESP_LOGI(TAG, "DNS servers : " IPSTR " , " IPSTR " , " IPSTR,
+           IP2STR(&gdns1.ip.u_addr.ip4),
+           IP2STR(&gdns2.ip.u_addr.ip4),
+           IP2STR(&gdns3.ip.u_addr.ip4));
+  GOT_IP = true;
+  sprintf(IP_ADDRESS, IPSTR, IP2STR(&event->ip_info.ip));
+  sprintf(BASE_URL, "http://" IPSTR, IP2STR(&ip_info->ip));
+  ESP_LOGI(TAG, "BASE URL: %s", BASE_URL);
+}
+
+void initEth()
+{
+  // Initialize TCP/IP network interface (should be called only once in application)
+  // ESP_ERROR_CHECK(esp_netif_init()); //already in main func
+  // ESP_ERROR_CHECK(esp_event_loop_create_default()); //already in main func
+  esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
+  netif = esp_netif_new(&cfg);
+  set_connection_prop(netif);
+  // Set default handlers to process TCP/IP stuffs
+  //ESP_ERROR_CHECK(esp_eth_set_default_handlers(netif));
+  // Register user defined event handers
+  ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL));
+
+  eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+  eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+  phy_config.phy_addr = 1;
+  phy_config.reset_gpio_num = -1; //SOFTWARE RESET ONLY!!
+  mac_config.smi_mdc_gpio_num = PIN_SMI_MDC;
+  mac_config.smi_mdio_gpio_num = PIN_SMI_MDIO;
+  esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&mac_config);
+  esp_eth_phy_t *phy = esp_eth_phy_new_lan8720(&phy_config);
+  esp_eth_config_t config = ETH_DEFAULT_CONFIG(mac, phy);
+  esp_eth_handle_t eth_handle = NULL;
+
+  ESP_ERROR_CHECK(esp_eth_driver_install(&config, &eth_handle));
+  /* attach Ethernet driver to TCP/IP stack */
+  ESP_ERROR_CHECK(esp_netif_attach(netif, esp_eth_new_netif_glue(eth_handle)));
+  /* start Ethernet driver state machine */
+  ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+}
+
+void setup_pins()
+{
+  // initialize IO
+  PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[12], PIN_FUNC_GPIO); // https://www.esp32.com/viewtopic.php?t=2687
+  PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[14], PIN_FUNC_GPIO); // https://www.esp32.com/viewtopic.php?t=2687
+  PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[15], PIN_FUNC_GPIO); // https://www.esp32.com/viewtopic.php?t=2687
+  PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[17], PIN_FUNC_GPIO); // https://www.esp32.com/viewtopic.php?t=2687
+//   ESP_ERROR_CHECK(gpio_set_direction(REALY_2_OUTPUT_PIN, GPIO_MODE_OUTPUT));
+//   ESP_ERROR_CHECK(gpio_set_level(REALY_1_OUTPUT_PIN, 1)); // замыкаем шлейф при включении
+  ESP_ERROR_CHECK(gpio_set_direction(PIN_PHY_POWER, GPIO_MODE_OUTPUT));
+  ESP_ERROR_CHECK(gpio_set_direction(REALY_1_OUTPUT_PIN, GPIO_MODE_OUTPUT));
+  ESP_ERROR_CHECK(gpio_set_direction(15, GPIO_MODE_INPUT));
+  ESP_ERROR_CHECK(gpio_set_intr_type(15, GPIO_INTR_ANYEDGE));
+//   ESP_ERROR_CHECK(gpio_set_direction(BUTTON_2_INPUT_PIN, GPIO_MODE_INPUT));
+//   ESP_ERROR_CHECK(gpio_set_intr_type(BUTTON_2_INPUT_PIN, GPIO_INTR_ANYEDGE));
+//   ESP_ERROR_CHECK(gpio_set_direction(EXTERNAL_INPUT_PIN, GPIO_MODE_INPUT));
+}
+
+
+void wifi_init_softap(void)
+{
+  // ESP_ERROR_CHECK(esp_netif_init());
+  // ESP_ERROR_CHECK(esp_event_loop_create_default());
+  esp_netif_create_default_wifi_ap();
+
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+  ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                      ESP_EVENT_ANY_ID,
+                                                      &ap_wifi_event_handler,
+                                                      NULL,
+                                                      NULL));
+
+  wifi_config_t wifi_config = {
+      .ap = {
+          .ssid = AP_ESP_WIFI_SSID,
+          .ssid_len = strlen(AP_ESP_WIFI_SSID),
+          .channel = AP_ESP_WIFI_CHANNEL,
+          .password = AP_ESP_WIFI_PASS,
+          .max_connection = AP_MAX_STA_CONN,
+          .authmode = WIFI_AUTH_WPA_WPA2_PSK,
+      },
+  };
+  if (strlen(AP_ESP_WIFI_PASS) == 0)
+  {
+    wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+  }
+
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+  ESP_ERROR_CHECK(esp_wifi_start());
+
+  ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d",
+           AP_ESP_WIFI_SSID, AP_ESP_WIFI_PASS, AP_ESP_WIFI_CHANNEL);
+}
+
+void init_configs()
+{
+  FILE *f;
+  char *res;
+
+  f = fopen("/spiffs/configs/counter", "r");
+
+  char buffer[24];
+
+  if (f != NULL)
+  {
+    fgets(buffer, sizeof(buffer), f);
+  }
+  fclose(f);
+  sscanf(buffer, "%d", &count);
+
+  ESP_LOGI(TAG, "count: %d ", count);
+
+  f = fopen("/spiffs/configs/place", "r");
+
+  if (f != NULL)
+  {
+    fgets(PLACE, sizeof(PLACE), f);
+  }
+
+  ESP_LOGI(TAG, "PLACE: %s\n", PLACE);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/ssid", "r");
+
+  if (f == NULL)
+  {
+    strcpy(WIFI_SSID, DEFAULT_WIFI_SSID);
+  }
+  else
+  {
+    fgets(WIFI_SSID, sizeof(WIFI_SSID), f);
+  }
+  ESP_LOGI(TAG, "SSID: %s\n", WIFI_SSID);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/ssid_pass", "r");
+
+  if (f == NULL)
+  {
+    strcpy(WIFI_PASS, DEFAULT_WIFI_PASS);
+  }
+  else
+  {
+    fgets(WIFI_PASS, sizeof(WIFI_PASS), f);
+  }
+  ESP_LOGI(TAG, "PASSWORD: %s\n", WIFI_PASS);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/mqtt_url", "r");
+
+  if (f != NULL)
+  {
+    fgets(BROKER_URL, sizeof(BROKER_URL), f);
+  }
+
+  ESP_LOGI(TAG, "BROKER URL: %s size: %d\n", BROKER_URL, strlen(BROKER_URL));
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/mqtt_token", "r");
+
+  if (f != NULL)
+  {
+    fgets(MQTT_TOKEN, sizeof(MQTT_TOKEN), f);
+  }
+
+  ESP_LOGI(TAG, "MQTT TOKEN: %s\n", MQTT_TOKEN);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/mqtt_topic", "r");
+
+  if (f != NULL)
+  {
+    fgets(MQTT_TOPIC, sizeof(MQTT_TOPIC), f);
+  }
+
+  ESP_LOGI(TAG, "MQTT DEFAULT_TOPIC: %s\n", MQTT_TOPIC);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/attr_topic", "r");
+
+  if (f != NULL)
+  {
+    fgets(ATTR_TOPIC, sizeof(ATTR_TOPIC), f);
+  }
+
+  ESP_LOGI(TAG, "ATTR DEFAULT_TOPIC: %s\n", ATTR_TOPIC);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/ip_address", "r");
+
+  if (f != NULL)
+  {
+    fgets(IP_ADDRESS, sizeof(IP_ADDRESS), f);
+  }
+  ESP_LOGI(TAG, "Static address: %s\n", IP_ADDRESS);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/gateway", "r");
+
+  if (f != NULL)
+  {
+    fgets(GATEWAY, sizeof(GATEWAY), f);
+  }
+  ESP_LOGI(TAG, "Gateway: %s\n", GATEWAY);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/netmask", "r");
+
+  if (f != NULL)
+  {
+    fgets(NET_MASK, sizeof(NET_MASK), f);
+  }
+  ESP_LOGI(TAG, "Netmask: %s\n", NET_MASK);
+
+  fclose(f);
+
+  // f = fopen("/spiffs/configs/port", "r");
+
+  // if (f != NULL)
+  // {
+  //   fgets(PORT, sizeof(PORT), f);
+  // }
+
+  // ESP_LOGI(TAG, "PORT: %s\n", PORT);
+
+  // fclose(f);
+
+  f = fopen("/spiffs/configs/dns_1", "r");
+
+  if (f != NULL)
+  {
+    fgets(DNS_1, sizeof(DNS_1), f);
+  }
+  ESP_LOGI(TAG, "DNS 1: %s\n", DNS_1);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/dns_2", "r");
+
+  if (f != NULL)
+  {
+    fgets(DNS_2, sizeof(DNS_2), f);
+  }
+  ESP_LOGI(TAG, "DNS 2: %s\n", DNS_2);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/update_period", "r");
+
+  if (f != NULL)
+  {
+    fgets(buffer, sizeof(buffer), f);
+  }
+
+  fclose(f);
+
+  sscanf(buffer, "%d", &MQTT_UPDATE_PERIOD);
+
+  if (MQTT_UPDATE_PERIOD < 1000)
+  { // период опроса - минимум 1 секунда
+    MQTT_UPDATE_PERIOD = 1000;
+  }
+
+  ESP_LOGI(TAG, "Update period: %dms ", MQTT_UPDATE_PERIOD);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/sn", "r");
+
+  if (f != NULL)
+  {
+    fgets(SN, sizeof(SN), f);
+  }
+  ESP_LOGI(TAG, "S/N: %s\n", SN);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/firmware", "r");
+
+  if (f != NULL)
+  {
+    fgets(FIRMWARE_VER, sizeof(FIRMWARE_VER), f);
+  }
+  ESP_LOGI(TAG, "FIRMWARE: %s\n", FIRMWARE_VER);
+
+  fclose(f);
+
+  f = fopen("/spiffs/configs/hardware", "r");
+
+  if (f != NULL)
+  {
+    fgets(HARDWARE_VER, sizeof(HARDWARE_VER), f);
+  }
+  ESP_LOGI(TAG, "HARDWARE: %s\n", HARDWARE_VER);
+
+  fclose(f);
+}
+
+
+
 
 /* Decode what PCNT's unit originated an interrupt
  * and pass this information together with the event type
@@ -95,9 +939,13 @@ static void ledc_init(void)
     ledc_channel.timer_sel  = LEDC_TIMER_1;
     ledc_channel.intr_type  = LEDC_INTR_DISABLE;
     ledc_channel.gpio_num   = LEDC_OUTPUT_IO;
-    ledc_channel.duty       = 1000; // set duty at about 10%
+    ledc_channel.duty       = 60; // set duty at about 10%
     ledc_channel.hpoint     = 0;
     ledc_channel_config(&ledc_channel);
+	// int dutyCycle = 9000;                    // Значение длительности импульса (duty cycle)
+	// ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, dutyCycle);
+	ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+	// vTaskDelay(1000 / portTICK_PERIOD_MS);
     
 }
 
@@ -131,7 +979,7 @@ static void pcnt_example_init(int unit)
 	pcnt_unit_config(&pcnt_config);
 
     /* Configure and enable the input filter */
-    pcnt_set_filter_value(unit, 100);
+    pcnt_set_filter_value(unit, 130);
     pcnt_filter_enable(unit);
 
     /* Set threshold 0 and 1 values and enable events to watch */
@@ -140,9 +988,9 @@ static void pcnt_example_init(int unit)
     pcnt_set_event_value(unit, PCNT_EVT_THRES_0, PCNT_THRESH0_VAL);
     pcnt_event_enable(unit, PCNT_EVT_THRES_0);
     /* Enable events on zero, maximum and minimum limit values */
-    pcnt_event_enable(unit, PCNT_EVT_ZERO);
-    pcnt_event_enable(unit, PCNT_EVT_H_LIM);
-    pcnt_event_enable(unit, PCNT_EVT_L_LIM);
+    // pcnt_event_enable(unit, PCNT_EVT_ZERO);
+    // pcnt_event_enable(unit, PCNT_EVT_H_LIM);
+    // pcnt_event_enable(unit, PCNT_EVT_L_LIM);
 
     /* Initialize PCNT's counter */
     pcnt_counter_pause(unit);
@@ -156,25 +1004,61 @@ static void pcnt_example_init(int unit)
     pcnt_counter_resume(unit);
 }
 
-void app_main(void)
-{
-    int pcnt_unit = PCNT_UNIT_0;
-    /* Initialize LEDC to generate sample pulse signal */
-    ledc_init();
+void timer_callback(TimerHandle_t xTimer) {
+    ESP_LOGI("timer_callback", "after 1 minute, callback stated)");
+	cJSON *message_json = cJSON_CreateObject();
+	int i = count - count_per_minute;
+	count_per_minute = i;
+	
+	if (message_json != NULL)
+	{
+		cJSON_AddNumberToObject(message_json, "counter per 1 minute", count_per_minute);
+	}
+	char *json = cJSON_Print(message_json);
+	esp_mqtt_client_publish(client, MQTT_TOPIC, json, 0, 1, 0);
+	vTaskDelay(50/portTICK_RATE_MS);
+	cJSON_free(json);
+	cJSON_Delete(message_json);
+	xSemaphoreGive(timer_semaphore);
+}
 
-    /* Initialize PCNT event queue and PCNT functions */
+void timer_callback_1h(TimerHandle_t xTimer) {
+    // ESP_LOGI("timer_callback", "after 1 hour, callback stated)");
+	cJSON *message_json = cJSON_CreateObject();
+	if(count_per_hour < count){
+		// if(count_per_hour == 0){
+		// 	count_per_hour = count;
+		// }
+		count_per_hour = count;
+		ESP_LOGI(TAG, "1 hour exist :%d", count_per_hour);
+	}
+	
+	if (message_json != NULL)
+	{
+		cJSON_AddNumberToObject(message_json, "Counter", count_per_hour);
+	}
+	char *json = cJSON_Print(message_json);
+	esp_mqtt_client_publish(client, MQTT_TOPIC, json, 0, 1, 0);
+	vTaskDelay(50/portTICK_RATE_MS);
+	cJSON_free(json);
+	cJSON_Delete(message_json);
+	xSemaphoreGive(timer_semaphore);
+}
+
+void pcnt_task_measure(void *args){
+	/* Initialize PCNT event queue and PCNT functions */
     pcnt_evt_queue = xQueueCreate(10, sizeof(pcnt_evt_t));
+	// mqt_queue = xQueueCreate(12, sizeof(pcnt_evt_t));
     pcnt_example_init(pcnt_unit);
-
-    int16_t count = 0;
     pcnt_evt_t evt;
     portBASE_TYPE res;
 	PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[PCNT_INPUT_SIG_IO], PIN_FUNC_GPIO);
-    while (1) {
+
+	while (1) {
         /* Wait for the event information passed from PCNT's interrupt handler.
          * Once received, decode the event type and print it on the serial monitor.
          */
-        res = xQueueReceive(pcnt_evt_queue, &evt, 100 / portTICK_PERIOD_MS);
+        res = xQueueReceive(pcnt_evt_queue, &evt, 10 / portTICK_PERIOD_MS);
         if (res == pdTRUE) {
             pcnt_get_counter_value(pcnt_unit, &count);
             ESP_LOGI(TAG, "Event PCNT unit[%d]; cnt: %d", evt.unit, count);
@@ -196,6 +1080,144 @@ void app_main(void)
         } else {
             pcnt_get_counter_value(pcnt_unit, &count);
             ESP_LOGI(TAG, "Current counter value :%d", count);
+			vTaskDelay(1000/portTICK_RATE_MS);
         }
     }
+}
+
+static void IRAM_ATTR gpio_isr_handler(void *arg)
+{
+//   ESP_LOGI("SEMA", "give SEMAPHORE");
+  xSemaphoreGive(input_semaphore);
+}
+
+void check_input_state_task(void *pvParameter)
+{
+  bool expected_state_1 = false;
+  button_1_state = gpio_get_level(15);
+
+  input_semaphore = xSemaphoreCreateBinary();
+
+  gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+  gpio_isr_handler_add(15, gpio_isr_handler, (void *)15);
+
+
+  for (;;)
+  {
+    expected_state_1 = gpio_get_level(15);
+    if (expected_state_1 != button_1_state || xSemaphoreTake(input_semaphore, 500 / portTICK_RATE_MS) == pdTRUE)
+    {
+      vTaskDelay(20 / portTICK_RATE_MS); // антидребезг
+      expected_state_1 = gpio_get_level(15);
+      if (expected_state_1 != button_1_state)
+      {
+        button_1_state = expected_state_1;
+        if (button_1_state)
+        {                                                       // выключаем тревогу только если вторая кнопка также отпущена
+            ESP_ERROR_CHECK(gpio_set_level(REALY_1_OUTPUT_PIN, 0));
+            // ESP_ERROR_CHECK(gpio_set_level(REALY_2_OUTPUT_PIN, 0)); // выключаем сирену
+			count++;
+        	ESP_LOGI(TAG, "current counter state: %d", count);
+        }
+        else
+        {
+          ESP_ERROR_CHECK(gpio_set_level(REALY_1_OUTPUT_PIN, 1)); 
+        //   ESP_ERROR_CHECK(gpio_set_level(REALY_2_OUTPUT_PIN, 1)); // включаем сирену
+        }
+      }
+      vTaskDelay(10 / portTICK_RATE_MS);
+    }
+  }
+}
+
+static xQueueHandle gpio_evt_queue = NULL;
+
+static void IRAM_ATTR gpio_isr_handler0(void* arg)
+{
+    uint32_t gpio_num = (uint32_t) arg;
+	count++;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+
+static void gpio_task_example(void* arg)
+{
+    for(;;) {
+        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+			gpio_set_level(17, gpio_get_level(36));
+			ESP_LOGI("CNTIMP", "counts: %d", count);
+        }
+		vTaskDelay(10/portTICK_RATE_MS);
+    }
+}
+
+void app_main(void)
+{
+	count_per_minute = count;
+	count_per_hour = count;
+	init_spiffs();
+	init_configs();
+	setup_pins();
+	xTaskCreate(check_input_state_task, "Check input state task", configMINIMAL_STACK_SIZE * 15, NULL, 5, NULL);
+	TimerHandle_t timer_1m = xTimerCreate("timer_1m", pdMS_TO_TICKS(60000), pdTRUE, 0, timer_callback);
+    if (timer_1m == NULL) {
+        ESP_LOGI("TIMERS 1m", "timer not initializing...");
+        return;
+    }
+	if (xTimerStart(timer_1m, 0) != pdPASS) {
+        ESP_LOGI("TIMERS 1m", "timer not started...");
+    }
+
+	TimerHandle_t timer_1h = xTimerCreate("timer_1h", pdMS_TO_TICKS(3600000), pdTRUE, 0, timer_callback_1h);
+    if (timer_1h == NULL) {
+        ESP_LOGI("TIMERS 1h", "timer not initializing...");
+        return;
+    }
+	if (xTimerStart(timer_1h, 0) != pdPASS) {
+        ESP_LOGI("TIMERS 1h", "timer not started...");
+    }
+
+	// Initialize NVS
+	esp_err_t ret = nvs_flash_init();
+	if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+	{
+		ESP_ERROR_CHECK(nvs_flash_erase());
+		ret = nvs_flash_init();
+	}
+
+	ESP_ERROR_CHECK(ret);
+	ESP_ERROR_CHECK(esp_netif_init());
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
+	
+	
+
+	// factory_mode = false;
+	mqtt_cfg.uri = BROKER_URL;
+	mqtt_cfg.username = MQTT_TOKEN;
+
+	// wifi_init_softap();//точка доступа вайфай
+	// wifi_init_sta(); // WIFI
+
+	gpio_set_level(PIN_PHY_POWER, 1);//switch on PHY MC
+	initEth();//ETH
+
+	while (!GOT_IP)
+    {
+      vTaskDelay(1000 / portTICK_RATE_MS);
+    }
+    if (strlen(BROKER_URL) > 4)
+    {
+      mqtt_app_start();
+    }
+	timer_semaphore = xSemaphoreCreateBinary();
+	while(true){
+		if(xSemaphoreTake(timer_semaphore, 500 / portTICK_RATE_MS) == pdTRUE){
+			f = fopen("/spiffs/configs/counter", "w");
+			if (f != NULL)
+			{
+				fprintf(f, "%d", count);
+			}
+			fclose(f);
+		}
+		vTaskDelay(10 / portTICK_RATE_MS);
+	}
 }

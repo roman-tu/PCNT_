@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css" />
+    <link rel="icon" type="image/png" sizes="48x48" href="logo.png" />
+    <link rel="shortcut icon" href="favicon.ico" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+
+    <title>CUBA SB Web UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body onload="funonload()">
+    <div сlass="container">
+      <div class="logo_container">
+        <img src="logo_2.png" alt="" />
+        <div class="logo_text">
+          <p style="font-weight: 700; font-size: 40px">CUBA</p>
+          <p>IoT PLATFORM</p>
+        </div>
+        <p style="margin: auto; font-size: 26px" class="logo_text">
+          SMART BUTTON
+        </p>
+    </div>
+        <div class="inputs">
+          <span>Test URL</span>
+          <form method="post" action="/configs/test_url" target="hidden-form">
+            <input id="test_url" type="text" name="test_url" />
+            <input
+              type="submit"
+              value="Save"
+              onclick="get_value_with_delay('test_url'), check(event)"
+            />
+          </form>
+          <span>S/N</span>
+          <form method="post" action="/configs/sn" target="hidden-form">
+            <input id="sn" type="text" name="sn" />
+            <input
+              type="submit"
+              value="Save"
+              onclick="get_value_with_delay('sn'), check(event)"
+            />
+          </form>
+
+          <span>MQTT Токен</span>
+          <form method="post" action="/configs/mqtt_token" target="hidden-form">
+            <input id="mqtt_token" type="text" name="mqtt_token" />
+            <input
+              type="submit"
+              value="Save"
+              onclick="get_value_with_delay('mqtt_token'), check(event)"
+            />
+          </form>
+
+          <form method="post" action="/check" target="hidden-form">
+            <br />
+            <input style="display: none" name="check" />
+            <input
+              id="resetButton"
+              class="reset"
+              type="submit"
+              value="Режим тестирования"
+              onclick="set_red()"
+            />
+          </form>
+
+          <iframe style="display: none" name="hidden-form"></iframe>
+        </div>
+      </div>
+    </div>
+    <script src="./factory_script.js"></script>
+  </body>
+  <style>
+  
+
+    .logo_container {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: center;
+    }
+  </style>
+</html>

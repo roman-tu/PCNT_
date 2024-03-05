@@ -6,6 +6,8 @@
 		"gpio.h": "c",
 		"esp_intr_alloc.h": "c",
 		"chrono": "c",
-		"algorithm": "c"
+		"algorithm": "c",
+		"*.ipp": "c",
+		"system_error": "c"
 	}
 }

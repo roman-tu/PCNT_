@@ -1,0 +1,5 @@
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        1536k,
+ota_0,    0,    ota_0,   ,        1536k,
+spiffs,   data, spiffs,  ,        512k

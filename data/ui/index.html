@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="icon" type="image/png" sizes="48x48" href="logo.png" />
+    <link rel="shortcut icon" href="favicon.ico" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>CUBA SB Web UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" type="text/css" href="./style.css" />
+  </head>
+  <body onload="funonload()">
+    <div class="popapp" style = "display: none;">
+      <div class="wrap">
+        <h1>Внимание!!</h1>
+        <p>При тестировании возможна активация сирены.<br/>Вы уверены что хотите запустить?</p>
+        <form onsubmit="submit_form(event)" class="buttons_" 
+          method=""
+          action=""
+          target="hidden-form">
+          <input type="text" name="test_1" value="1" style="display:none;">
+          <input class="btn-dang" type="button" tabindex="2"  value="Да" onclick="submit_form(event)">
+          <input class="btn-" type="button" tabindex="1" value="Нет" onclick="closeMW()">
+        </form>
+      </div>
+    </div>
+    <div сlass="container">
+      <div class="logo_container">
+        <div class="div-logo_container">
+          <img src="logo_2.png" alt="" />
+          <div class="logo_text">
+            <p style="font-weight: 700; font-size: 40px">CUBA</p>
+            <p>IoT PLATFORM</p>
+          </div>
+        </div>
+          <p style="margin: 20px 0px 0px 0px; font-size: 26px" class="logo_text logo_text_SB">
+            SMART BUTTON
+          </p>
+        
+        <div class="fw-hw">
+          <p id="firmware"></p>
+          <p id="hardware"></p>
+          <p id="sn"></p>
+        </div>
+      </div>
+      <div class="inputs">
+        <span>URL Нажата кнопка 1</span>
+        <form
+          method="post"
+          action="/configs/url_button_1_pressed"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input
+            id="url_button_1_pressed"
+            type="text"
+            name="url_button_1_pressed"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('url_button_1_pressed'), check(event)"
+          />
+          <input
+            class=""
+            type="button"
+            value="Test"
+            name="1"
+            id="1"
+            style="z-index: -9;"
+            onclick="checking_serv_code(event)"
+          />
+          
+        </form>
+
+        <span>URL Отпущена кнопка 1</span>
+        <form
+          method="post"
+          action="/configs/url_button_1_released"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input
+            id="url_button_1_released"
+            type="text"
+            name="url_button_1_released"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('url_button_1_released'), check(event)"
+          />
+          <input
+            class=""
+            type="button"
+            value="Test"
+            name="2"
+            id="2"
+            style="z-index: -9;"
+            onclick="checking_serv_code(event)"
+          />
+        </form>
+
+        <span>URL Нажата кнопка 2</span>
+        <form
+          method="post"
+          action="/configs/url_button_2_pressed"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input
+            id="url_button_2_pressed"
+            type="text"
+            name="url_button_2_pressed"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('url_button_2_pressed'), check(event)"
+          />
+          <input
+            class=""
+            type="button"
+            value="Test"
+            name="3"
+            id="3"
+            style="z-index: -9;"
+            onclick="checking_serv_code(event)"
+          />
+        </form>
+
+        <span>URL Отпущена кнопка 2</span>
+        <form
+          method="post"
+          action="/configs/url_button_2_released"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input
+            id="url_button_2_released"
+            type="text"
+            name="url_button_2_released"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('url_button_2_released'), check(event)"
+          />
+          <input
+            class=""
+            type="button"
+            value="Test"
+            name="4"
+            id="4"
+            style="z-index: -9;"
+            onclick="checking_serv_code(event)"
+          />
+        </form>
+
+        <span>Место установки:</span>
+        <form
+          enctype="text/plain"
+          method="post"
+          action="/configs/place"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input id="place" type="text" name="place" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('place'), check(event)"
+          />
+        </form>
+
+        <span>MQTT URL</span>
+        <form method="post" action="/configs/mqtt_url" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input id="mqtt_url" type="text" name="mqtt_url" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('mqtt_url'), check(event)"
+          />
+        </form>
+
+        <span>MQTT Токен</span>
+        <form method="post" action="/configs/mqtt_token" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input id="mqtt_token" type="text" name="mqtt_token" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('mqtt_token'), check(event)"
+          />
+        </form>
+        
+        <span>Static IP:</span>
+        <form method="post" action="/configs/ip_address" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input
+            id="ip_address"
+            type="text"
+            name="ip_address"
+            pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('ip_address'), check(event)"
+          />
+        </form>
+
+        <span>Шлюз:</span>
+        <form method="post" action="/configs/gateway" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input
+            id="gateway"
+            type="text"
+            name="gateway"
+            pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('gateway'), check(event)"
+          />
+        </form>
+
+        <span>Маска подсети:</span>
+        <form method="post" action="/configs/netmask" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input
+            id="netmask"
+            type="text"
+            name="netmask"
+            pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('netmask'), check(event)"
+          />
+        </form>
+        
+        <span>DNS 1:</span>
+        <form method="post" action="/configs/dns_1" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input
+            id="dns_1"
+            type="text"
+            name="dns_1"
+            pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('dns_1'), check(event)"
+          />
+        </form>
+
+        <span>DNS 2:</span>
+        <form method="post" action="/configs/dns_2" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input
+            id="dns_2"
+            type="text"
+            name="dns_2"
+            pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('dns_2'), check(event)"
+          />
+        </form>
+
+        <span>Период авторизации, с:</span>
+        <form method="post" action="/configs/auth_period" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input
+            id="auth_period"
+            type="text"
+            name="auth_period"
+            pattern="[0-9]{,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('auth_period'), check(event)"
+          />
+        </form>
+
+        <span>Wi-Fi SSID:</span>
+        <form
+          enctype="text/plain"
+          method="post"
+          action="/configs/ssid"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input id="ssid" type="text" name="ssid" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('ssid'), check(event)"
+          />
+        </form>
+
+        <span>Wi-Fi Password:</span>
+        <form
+          enctype="text/plain"
+          method="post"
+          action="/configs/ssid_pass"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input id="ssid_pass" type="text" name="ssid_pass" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('ssid_pass'), check(event)"
+          />
+        </form>
+
+        <span>User:</span>
+        <form method="post" action="/configs/user_name" target="hidden-form">
+          <div class="check">
+             
+          </div>
+          <input id="user_name" type="text" name="user_name" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('user_name'), check(event)"
+          />
+        </form>
+
+        <span>User password:</span>
+        <form
+          method="post"
+          action="/configs/user_password"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input id="user_password" type="text" name="user_password" />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('user_password'), check(event)"
+          />
+        </form>
+
+        <span>Период опроса, мс:</span>
+        <form
+          method="post"
+          action="/configs/update_period"
+          target="hidden-form"
+        >
+          <div class="check">
+             
+          </div>
+          <input
+            id="update_period"
+            type="text"
+            name="update_period"
+            pattern="[0-9]{,3}"
+          />
+          <input
+            type="submit"
+            value="Save"
+            onclick="get_value_with_delay('update_period'), check(event)"
+          />
+        </form>
+
+        <form method="post" action="/reset" target="hidden-form">
+          <br />
+          <input style="display: none" name="reset" />
+          <input class="reset" type="submit" value="Перезагрузить модуль" />
+        </form>
+
+        <iframe style="display: none" name="hidden-form"></iframe>
+      </div>
+    </div>
+    <script src="./client_script.js"></script>
+  </body>
+</html>
